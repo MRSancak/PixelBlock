@@ -1,0 +1,733 @@
+using System.Collections.Generic;
+using Godot;
+using PixelBlock.Core;
+
+namespace PixelBlock.UI;
+
+public partial class GameHud : CanvasLayer
+{
+    public Hotbar Hotbar { get; private set; }
+    private ProgressBar _health;
+    private ProgressBar _air;
+    private ProgressBar _hunger;
+    private Label _banner;
+    private int _bannerToken;
+    private Control _crosshair;
+    private Label _weaponLabel;
+
+    private ColorRect _underwater;
+
+    public override void _Ready()
+    {
+        BuildUnderwater();
+        BuildDamage();
+        BuildPost();
+        BuildCrosshair();
+        BuildHotbar();
+        BuildBars();
+        BuildBanner();
+        BuildWeaponLabel();
+        BuildInteractPrompt();
+        BuildMouseHint();
+        BuildObjectives();
+        BuildCompass();
+        BuildClock();
+        BuildDebug();
+        BuildFreeCam();
+        BuildReader();
+        BuildFade();
+    }
+
+    private Label _debug;
+
+    public bool DebugVisible => _debug != null && _debug.Visible;
+
+    private void BuildDebug()
+    {
+        _debug = new Label { Name = "Debug", Visible = false };
+        _debug.AddThemeFontSizeOverride("font_size", 15);
+        _debug.AddThemeColorOverride("font_color", new Color(0.7f, 1f, 0.7f));
+        _debug.AddThemeColorOverride("font_outline_color", Colors.Black);
+        _debug.AddThemeConstantOverride("outline_size", 4);
+        _debug.MouseFilter = Control.MouseFilterEnum.Ignore;
+        _debug.Position = new Vector2(20, 96);
+        AddChild(_debug);
+    }
+
+    public void ToggleDebug() { if (_debug != null) _debug.Visible = !_debug.Visible; }
+    public void SetDebug(string text) { if (_debug != null && _debug.Text != text) _debug.Text = text; }
+
+    private Label _freeCam;
+
+    private void BuildFreeCam()
+    {
+        _freeCam = new Label { Name = "FreeCam", Visible = false };
+        _freeCam.AddThemeFontSizeOverride("font_size", 16);
+        _freeCam.AddThemeColorOverride("font_color", new Color(1f, 0.95f, 0.7f));
+        _freeCam.AddThemeColorOverride("font_outline_color", Colors.Black);
+        _freeCam.AddThemeConstantOverride("outline_size", 4);
+        _freeCam.MouseFilter = Control.MouseFilterEnum.Ignore;
+        AddChild(_freeCam);
+        GetViewport().SizeChanged += RelayoutFreeCam;
+        RelayoutFreeCam();
+    }
+
+    private void RelayoutFreeCam()
+    {
+        Vector2 vp = GetViewport().GetVisibleRect().Size;
+        _freeCam.Size = new Vector2(460, 70);
+        _freeCam.Position = new Vector2(20, vp.Y - 96);
+    }
+
+    public void SetFreeCam(string text)
+    {
+        if (_freeCam == null) return;
+        if (_freeCam.Text != text) _freeCam.Text = text;
+        _freeCam.Visible = !string.IsNullOrEmpty(text);
+    }
+
+    private Label _clock;
+
+    private void BuildClock()
+    {
+        _clock = new Label { Name = "Clock", Text = "", HorizontalAlignment = HorizontalAlignment.Center };
+        _clock.AddThemeFontSizeOverride("font_size", 20);
+        _clock.AddThemeColorOverride("font_color", new Color(1f, 0.95f, 0.72f));
+        _clock.AddThemeColorOverride("font_outline_color", Colors.Black);
+        _clock.AddThemeConstantOverride("outline_size", 4);
+        _clock.MouseFilter = Control.MouseFilterEnum.Ignore;
+        AddChild(_clock);
+        GetViewport().SizeChanged += RelayoutClock;
+        RelayoutClock();
+    }
+
+    private void RelayoutClock()
+    {
+        Vector2 vp = GetViewport().GetVisibleRect().Size;
+        _clock.Size = new Vector2(vp.X, 26);
+        _clock.Position = new Vector2(0, 60);
+    }
+
+    public void SetClock(string text)
+    {
+        if (_clock != null && _clock.Text != text) _clock.Text = text;
+    }
+
+    private Control _compass;
+    private float _heading;
+    private bool _compassOn;
+
+    private void BuildCompass()
+    {
+        _compass = new Control { Name = "Compass", MouseFilter = Control.MouseFilterEnum.Ignore, Visible = false };
+        _compass.SetAnchorsPreset(Control.LayoutPreset.TopWide);
+        AddChild(_compass);
+        _compass.Draw += DrawCompass;
+        GetViewport().SizeChanged += () => _compass.QueueRedraw();
+    }
+
+    public void SetCompassEnabled(bool on)
+    {
+        _compassOn = on;
+        _compass.Visible = on;
+    }
+
+    public void SetHeading(float headingDegrees)
+    {
+        if (!_compassOn) return;
+        _heading = headingDegrees;
+        _compass.QueueRedraw();
+    }
+
+    private void DrawCompass()
+    {
+        Vector2 vp = GetViewport().GetVisibleRect().Size;
+        float cx = vp.X / 2f, y = 22f, halfW = 230f, halfFov = 70f;
+        var dim = new Color(1, 1, 1, 0.35f);
+        var bright = new Color(1f, 0.92f, 0.55f);
+        _compass.DrawLine(new Vector2(cx - halfW, y + 26), new Vector2(cx + halfW, y + 26), dim, 2f);
+        _compass.DrawLine(new Vector2(cx, y + 12), new Vector2(cx, y + 40), bright, 2f);
+
+        (float ang, string s)[] marks =
+        {
+            (0, "N"), (45, "NE"), (90, "E"), (135, "SE"),
+            (180, "S"), (225, "SW"), (270, "W"), (315, "NW"),
+        };
+        var font = ThemeDB.FallbackFont;
+        foreach (var (ang, s) in marks)
+        {
+            float delta = Mathf.Wrap(ang - _heading, -180f, 180f);
+            if (Mathf.Abs(delta) > halfFov) continue;
+            float x = cx + (delta / halfFov) * halfW;
+            bool card = s.Length == 1;
+            int size = card ? 22 : 15;
+            Vector2 ts = font.GetStringSize(s, HorizontalAlignment.Left, -1, size);
+            _compass.DrawString(font, new Vector2(x - ts.X / 2f, y + 8), s, HorizontalAlignment.Left, -1, size,
+                card ? bright : new Color(1, 1, 1, 0.7f));
+        }
+    }
+
+    private ShaderMaterial _underwaterMat;
+    private float _uwStrength;
+    private float _uwTarget;
+
+    private void BuildUnderwater()
+    {
+
+        _underwater = new ColorRect { MouseFilter = Control.MouseFilterEnum.Ignore, Visible = false };
+        _underwater.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        var shader = GD.Load<Shader>("res://assets/shaders/underwater.gdshader");
+        if (shader != null)
+        {
+            _underwaterMat = new ShaderMaterial { Shader = shader };
+            _underwater.Material = _underwaterMat;
+        }
+        else
+        {
+
+            _underwater.Color = new Color(0.12f, 0.36f, 0.55f, 0f);
+        }
+        AddChild(_underwater);
+    }
+
+    public void SetUnderwater(float target) => _uwTarget = Mathf.Clamp(target, 0f, 1f);
+
+    private float _airDarken;
+
+    public void SetAirDarken(float v) => _airDarken = Mathf.Clamp(v, 0f, 1f);
+
+    private ColorRect _post;
+    private ShaderMaterial _postMat;
+    private float _vignCur = 0.28f;
+    private float _vignTarget = 0.28f;
+
+    private void BuildPost()
+    {
+        _post = new ColorRect { Name = "Post", MouseFilter = Control.MouseFilterEnum.Ignore };
+        _post.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        var shader = GD.Load<Shader>("res://assets/shaders/post.gdshader");
+        if (shader != null)
+        {
+            _postMat = new ShaderMaterial { Shader = shader };
+            _post.Material = _postMat;
+            _post.Visible = true;
+        }
+        else _post.Visible = false;
+        AddChild(_post);
+    }
+
+    public void SetSprinting(bool on) => _vignTarget = on ? 0.36f : 0.28f;
+
+    private ColorRect _damage;
+    private ShaderMaterial _damageMat;
+    private float _dmgFlash;
+    private float _lowHealth;
+
+    private void BuildDamage()
+    {
+        _damage = new ColorRect { Name = "Damage", MouseFilter = Control.MouseFilterEnum.Ignore, Visible = false };
+        _damage.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        var shader = GD.Load<Shader>("res://assets/shaders/damage.gdshader");
+        if (shader != null)
+        {
+            _damageMat = new ShaderMaterial { Shader = shader };
+            _damage.Material = _damageMat;
+        }
+        AddChild(_damage);
+    }
+
+    public void Flash(Color color, float amount)
+    {
+        if (_damageMat == null) return;
+        _damageMat.SetShaderParameter("flash_color", color);
+        _dmgFlash = Mathf.Max(_dmgFlash, Mathf.Clamp(amount, 0f, 1f));
+    }
+
+    public void FlashHurt(float amount = 0.7f) => Flash(new Color(0.85f, 0.06f, 0.05f), amount);
+
+    public void SetLowHealth(float healthFraction)
+    {
+        const float thresh = 0.3f;
+        _lowHealth = healthFraction < thresh && healthFraction > 0.001f
+            ? (thresh - healthFraction) / thresh
+            : 0f;
+    }
+
+    public override void _Process(double delta)
+    {
+        float dt = (float)delta;
+
+        if (_underwater != null)
+        {
+            if (!Mathf.IsEqualApprox(_uwStrength, _uwTarget))
+            {
+
+                float rate = _uwTarget < _uwStrength ? 1.4f : 3.5f;
+                _uwStrength = Mathf.MoveToward(_uwStrength, _uwTarget, dt * rate);
+            }
+            bool show = _uwStrength > 0.001f;
+            _underwater.Visible = show;
+            if (show)
+            {
+                if (_underwaterMat != null)
+                {
+                    _underwaterMat.SetShaderParameter("strength", _uwStrength);
+                    _underwaterMat.SetShaderParameter("low_air", _airDarken);
+                }
+                else _underwater.Color = new Color(0.12f, 0.36f, 0.55f, _uwStrength * 0.34f);
+            }
+        }
+
+        if (_damageMat != null)
+        {
+            if (_dmgFlash > 0f) _dmgFlash = Mathf.MoveToward(_dmgFlash, 0f, dt * 2.5f);
+            _damageMat.SetShaderParameter("flash_amount", _dmgFlash);
+            _damageMat.SetShaderParameter("low_health", _lowHealth);
+            bool dshow = _dmgFlash > 0.001f || _lowHealth > 0.001f;
+            if (_damage.Visible != dshow) _damage.Visible = dshow;
+        }
+
+        if (_postMat != null && !Mathf.IsEqualApprox(_vignCur, _vignTarget))
+        {
+            _vignCur = Mathf.MoveToward(_vignCur, _vignTarget, dt * 0.18f);
+            _postMat.SetShaderParameter("vignette_strength", _vignCur);
+        }
+    }
+
+    private Control _reader;
+    private Label _readerTitle, _readerBody;
+    public bool ReaderOpen { get; private set; }
+
+    private void BuildReader()
+    {
+        _reader = new Control { Name = "Reader", Visible = false };
+        _reader.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+
+        var dim = new ColorRect { Color = new Color(0f, 0f, 0f, 0.55f), MouseFilter = Control.MouseFilterEnum.Stop };
+        dim.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        _reader.AddChild(dim);
+
+        var center = new CenterContainer();
+        center.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        _reader.AddChild(center);
+
+        var panel = new PanelContainer { CustomMinimumSize = new Vector2(680, 460) };
+        panel.AddThemeStyleboxOverride("panel", new StyleBoxFlat
+        {
+            BgColor = new Color(0.12f, 0.10f, 0.08f, 0.98f),
+            BorderColor = new Color(0.55f, 0.42f, 0.22f),
+            BorderWidthTop = 3, BorderWidthBottom = 3, BorderWidthLeft = 3, BorderWidthRight = 3,
+            CornerRadiusTopLeft = 10, CornerRadiusTopRight = 10, CornerRadiusBottomLeft = 10, CornerRadiusBottomRight = 10,
+            ContentMarginLeft = 26, ContentMarginRight = 26, ContentMarginTop = 22, ContentMarginBottom = 22,
+        });
+        center.AddChild(panel);
+
+        var vbox = new VBoxContainer();
+        vbox.AddThemeConstantOverride("separation", 14);
+        panel.AddChild(vbox);
+
+        _readerTitle = new Label { HorizontalAlignment = HorizontalAlignment.Center };
+        _readerTitle.AddThemeFontSizeOverride("font_size", 30);
+        _readerTitle.AddThemeColorOverride("font_color", new Color(1f, 0.9f, 0.55f));
+        _readerTitle.AddThemeColorOverride("font_outline_color", Colors.Black);
+        _readerTitle.AddThemeConstantOverride("outline_size", 4);
+        vbox.AddChild(_readerTitle);
+
+        var scroll = new ScrollContainer
+        {
+            CustomMinimumSize = new Vector2(628, 340),
+            HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled,
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+        };
+        vbox.AddChild(scroll);
+
+        _readerBody = new Label
+        {
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            CustomMinimumSize = new Vector2(620, 0),
+        };
+        _readerBody.AddThemeFontSizeOverride("font_size", 21);
+        _readerBody.AddThemeColorOverride("font_color", new Color(0.92f, 0.92f, 0.88f));
+        scroll.AddChild(_readerBody);
+
+        var hint = new Label
+        {
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Text = "[E] or Esc to close   ·   scroll to read more",
+        };
+        hint.AddThemeFontSizeOverride("font_size", 15);
+        hint.AddThemeColorOverride("font_color", new Color(0.72f, 0.72f, 0.72f));
+        vbox.AddChild(hint);
+
+        AddChild(_reader);
+    }
+
+    public void OpenReader(string title, string body)
+    {
+        if (_reader == null) return;
+        _readerTitle.Text = title ?? "";
+        _readerBody.Text = body ?? "";
+        _reader.Visible = true;
+        ReaderOpen = true;
+    }
+
+    public void CloseReader()
+    {
+        if (_reader == null) return;
+        _reader.Visible = false;
+        ReaderOpen = false;
+    }
+
+    private ColorRect _fade;
+
+    private void BuildFade()
+    {
+        _fade = new ColorRect
+        {
+            Name = "Fade",
+            Color = new Color(0, 0, 0, 0),
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            Visible = false,
+        };
+        _fade.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        AddChild(_fade);
+    }
+
+    public async System.Threading.Tasks.Task FadeToBlack(float seconds = 0.6f)
+    {
+        if (_fade == null) return;
+        _fade.Visible = true;
+        var tween = CreateTween();
+        tween.TweenProperty(_fade, "color", new Color(0, 0, 0, 1), seconds);
+        await ToSignal(tween, Tween.SignalName.Finished);
+    }
+
+    public async System.Threading.Tasks.Task FadeIn(float seconds = 0.6f)
+    {
+        if (_fade == null) return;
+        _fade.Visible = true;
+        var tween = CreateTween();
+        tween.TweenProperty(_fade, "color", new Color(0, 0, 0, 0), seconds);
+        await ToSignal(tween, Tween.SignalName.Finished);
+        _fade.Visible = false;
+    }
+
+    private void BuildWeaponLabel()
+    {
+        _weaponLabel = new Label { Visible = false, Text = "" };
+        _weaponLabel.AddThemeFontSizeOverride("font_size", 20);
+        _weaponLabel.AddThemeColorOverride("font_outline_color", Colors.Black);
+        _weaponLabel.AddThemeConstantOverride("outline_size", 4);
+        _weaponLabel.MouseFilter = Control.MouseFilterEnum.Ignore;
+        _weaponLabel.SetAnchorsPreset(Control.LayoutPreset.BottomRight);
+        AddChild(_weaponLabel);
+        GetViewport().SizeChanged += RelayoutWeapon;
+        RelayoutWeapon();
+    }
+
+    private void RelayoutWeapon()
+    {
+        Vector2 vp = GetViewport().GetVisibleRect().Size;
+        _weaponLabel.Size = new Vector2(220, 28);
+        _weaponLabel.Position = new Vector2(vp.X - 240, vp.Y - 44);
+        _weaponLabel.HorizontalAlignment = HorizontalAlignment.Right;
+    }
+
+    public void SetWeapon(string name) => _weaponLabel.Text = string.IsNullOrEmpty(name) ? "" : $"⚔ {name}";
+    public void SetWeaponVisible(bool on) => _weaponLabel.Visible = on;
+    public void SetHotbarVisible(bool on) => Hotbar.Visible = on;
+
+    private Label _interactPrompt;
+
+    private void BuildInteractPrompt()
+    {
+        _interactPrompt = new Label { Visible = false, HorizontalAlignment = HorizontalAlignment.Center };
+        _interactPrompt.AddThemeFontSizeOverride("font_size", 22);
+        _interactPrompt.AddThemeColorOverride("font_outline_color", Colors.Black);
+        _interactPrompt.AddThemeConstantOverride("outline_size", 5);
+        _interactPrompt.MouseFilter = Control.MouseFilterEnum.Ignore;
+        AddChild(_interactPrompt);
+        GetViewport().SizeChanged += RelayoutInteract;
+        RelayoutInteract();
+    }
+
+    private void RelayoutInteract()
+    {
+        Vector2 vp = GetViewport().GetVisibleRect().Size;
+        _interactPrompt.Size = new Vector2(vp.X, 28);
+        _interactPrompt.Position = new Vector2(0, vp.Y * 0.62f);
+    }
+
+    public void SetInteractPrompt(string text)
+    {
+        if (_interactPrompt == null) return;
+        _interactPrompt.Text = text;
+        _interactPrompt.Visible = !string.IsNullOrEmpty(text);
+    }
+
+    private Label _mouseHint;
+
+    private void BuildMouseHint()
+    {
+        _mouseHint = new Label { Visible = false, HorizontalAlignment = HorizontalAlignment.Center };
+        _mouseHint.AddThemeFontSizeOverride("font_size", 18);
+        _mouseHint.AddThemeColorOverride("font_color", new Color(1f, 1f, 1f, 0.85f));
+        _mouseHint.AddThemeColorOverride("font_outline_color", Colors.Black);
+        _mouseHint.AddThemeConstantOverride("outline_size", 5);
+        _mouseHint.MouseFilter = Control.MouseFilterEnum.Ignore;
+        AddChild(_mouseHint);
+        GetViewport().SizeChanged += RelayoutMouseHint;
+        RelayoutMouseHint();
+    }
+
+    private void RelayoutMouseHint()
+    {
+        Vector2 vp = GetViewport().GetVisibleRect().Size;
+        _mouseHint.Size = new Vector2(vp.X, 24);
+        _mouseHint.Position = new Vector2(0, vp.Y - 40);
+    }
+
+    public void SetMouseHint(string text)
+    {
+        if (_mouseHint == null) return;
+        if (_mouseHint.Text != text) _mouseHint.Text = text;
+        _mouseHint.Visible = !string.IsNullOrEmpty(text);
+    }
+
+    private VBoxContainer _objectives;
+    private readonly System.Collections.Generic.List<Label> _objLabels = new();
+    private readonly System.Collections.Generic.List<string> _objText = new();
+    private Label _center;
+
+    private void BuildObjectives()
+    {
+        _objectives = new VBoxContainer { Name = "Görevler" };
+        _objectives.AddThemeConstantOverride("separation", 4);
+        AddChild(_objectives);
+
+        _center = new Label
+        {
+            Visible = false,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+        };
+        _center.AddThemeFontSizeOverride("font_size", 40);
+        _center.AddThemeColorOverride("font_color", new Color(1f, 0.92f, 0.55f));
+        _center.AddThemeColorOverride("font_outline_color", Colors.Black);
+        _center.AddThemeConstantOverride("outline_size", 8);
+        _center.MouseFilter = Control.MouseFilterEnum.Ignore;
+        AddChild(_center);
+
+        GetViewport().SizeChanged += RelayoutObjectives;
+        RelayoutObjectives();
+    }
+
+    private void RelayoutObjectives()
+    {
+        Vector2 vp = GetViewport().GetVisibleRect().Size;
+        _objectives.Position = new Vector2(vp.X - 296, 20);
+        _objectives.Size = new Vector2(280, 200);
+        _center.Position = new Vector2(vp.X * 0.15f, vp.Y * 0.34f);
+        _center.Size = new Vector2(vp.X * 0.7f, vp.Y * 0.32f);
+    }
+
+    public void SetObjectives(System.Collections.Generic.IEnumerable<string> items)
+    {
+        var list = new System.Collections.Generic.List<(string, bool)>();
+        foreach (string s in items) list.Add((s, false));
+        SetObjectivesWithState(list);
+    }
+
+    public void SetObjectivesWithState(System.Collections.Generic.IEnumerable<(string text, bool done)> items)
+    {
+        foreach (Node c in _objectives.GetChildren()) c.QueueFree();
+        _objLabels.Clear();
+        _objText.Clear();
+        var title = new Label { Text = "Görevler" };
+        title.AddThemeFontSizeOverride("font_size", 18);
+        title.AddThemeColorOverride("font_color", new Color(1f, 0.9f, 0.55f));
+        title.AddThemeColorOverride("font_outline_color", Colors.Black);
+        title.AddThemeConstantOverride("outline_size", 4);
+        _objectives.AddChild(title);
+        foreach (var (text, done) in items)
+        {
+            var l = new Label { Text = (done ? "☑  " : "☐  ") + text };
+            l.AddThemeFontSizeOverride("font_size", 16);
+            l.AddThemeColorOverride("font_outline_color", Colors.Black);
+            l.AddThemeConstantOverride("outline_size", 4);
+            l.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+            l.CustomMinimumSize = new Vector2(272, 0);
+            if (done) l.Modulate = new Color(0.6f, 1f, 0.6f, 0.85f);
+            _objectives.AddChild(l);
+            _objLabels.Add(l);
+            _objText.Add(text);
+        }
+    }
+
+    public void CompleteObjective(int i)
+    {
+        if (i < 0 || i >= _objLabels.Count) return;
+        _objLabels[i].Text = "☑  " + _objText[i];
+        _objLabels[i].Modulate = new Color(0.6f, 1f, 0.6f, 0.85f);
+        AudioManager.Play("chime");
+    }
+
+    private int _centerToken;
+
+    public void ShowCenter(string text, float seconds = 0f)
+    {
+        _center.Text = text;
+        _center.Visible = !string.IsNullOrEmpty(text);
+        int token = ++_centerToken;
+        if (seconds > 0)
+            GetTree().CreateTimer(seconds).Timeout += () => { if (token == _centerToken) _center.Visible = false; };
+    }
+
+    public void Configure(BlockTextures tex, IEnumerable<ushort> palette)
+    {
+        Hotbar.Init(tex, palette);
+    }
+
+    private void BuildCrosshair()
+    {
+        _crosshair = new Control { Name = "Crosshair", MouseFilter = Control.MouseFilterEnum.Ignore };
+        _crosshair.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        AddChild(_crosshair);
+        _crosshair.Draw += () =>
+        {
+            Vector2 c = _crosshair.Size / 2f;
+            var col = new Color(1, 1, 1, 0.85f);
+            _crosshair.DrawLine(c + new Vector2(-9, 0), c + new Vector2(9, 0), col, 2f);
+            _crosshair.DrawLine(c + new Vector2(0, -9), c + new Vector2(0, 9), col, 2f);
+        };
+        _crosshair.Resized += () => _crosshair.QueueRedraw();
+    }
+
+    private void BuildHotbar()
+    {
+        Hotbar = new Hotbar { Name = "Hotbar" };
+        Hotbar.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        AddChild(Hotbar);
+    }
+
+    private void BuildBars()
+    {
+        var box = new VBoxContainer { Name = "Stats" };
+        box.AddThemeConstantOverride("separation", 6);
+        AddChild(box);
+        box.SetAnchorsPreset(Control.LayoutPreset.TopLeft);
+        box.Position = new Vector2(20, 20);
+
+        _health = MakeBar(new Color(0.85f, 0.22f, 0.22f), "Can");
+        _air = MakeBar(new Color(0.35f, 0.7f, 0.95f), "Hava");
+        _hunger = MakeBar(new Color(0.88f, 0.55f, 0.14f), "Açlık");
+        box.AddChild(WithLabel("❤", _health));
+        box.AddChild(WithLabel("🍗", _hunger));
+        _hunger.GetParent<Control>().Visible = false;
+        box.AddChild(WithLabel("○", _air));
+        _air.GetParent<Control>().Visible = false;
+    }
+
+    private static ProgressBar MakeBar(Color fill, string name)
+    {
+        var bar = new ProgressBar
+        {
+            Name = name,
+            MinValue = 0,
+            MaxValue = 100,
+            Value = 100,
+            ShowPercentage = false,
+            CustomMinimumSize = new Vector2(220, 22),
+        };
+        var bg = new StyleBoxFlat { BgColor = new Color(0, 0, 0, 0.5f), CornerRadiusTopLeft = 5, CornerRadiusTopRight = 5, CornerRadiusBottomLeft = 5, CornerRadiusBottomRight = 5 };
+        var fg = new StyleBoxFlat { BgColor = fill, CornerRadiusTopLeft = 5, CornerRadiusTopRight = 5, CornerRadiusBottomLeft = 5, CornerRadiusBottomRight = 5 };
+        bar.AddThemeStyleboxOverride("background", bg);
+        bar.AddThemeStyleboxOverride("fill", fg);
+        return bar;
+    }
+
+    private static HBoxContainer WithLabel(string glyph, Control bar)
+    {
+        var row = new HBoxContainer();
+        row.AddThemeConstantOverride("separation", 8);
+        var lbl = new Label { Text = glyph };
+        lbl.AddThemeFontSizeOverride("font_size", 20);
+        lbl.AddThemeColorOverride("font_outline_color", Colors.Black);
+        lbl.AddThemeConstantOverride("outline_size", 4);
+        row.AddChild(lbl);
+        row.AddChild(bar);
+        return row;
+    }
+
+    private void BuildBanner()
+    {
+        _banner = new Label
+        {
+            Name = "Banner",
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Visible = false,
+        };
+        _banner.AddThemeFontSizeOverride("font_size", 30);
+        _banner.AddThemeColorOverride("font_outline_color", Colors.Black);
+        _banner.AddThemeConstantOverride("outline_size", 6);
+        _banner.MouseFilter = Control.MouseFilterEnum.Ignore;
+        AddChild(_banner);
+        GetViewport().SizeChanged += RelayoutBanner;
+        RelayoutBanner();
+    }
+
+    public override void _ExitTree()
+    {
+        var vp = GetViewport();
+        if (vp == null) return;
+        vp.SizeChanged -= RelayoutWeapon;
+        vp.SizeChanged -= RelayoutInteract;
+        vp.SizeChanged -= RelayoutObjectives;
+        vp.SizeChanged -= RelayoutBanner;
+        vp.SizeChanged -= RelayoutMouseHint;
+        vp.SizeChanged -= RelayoutClock;
+        vp.SizeChanged -= RelayoutFreeCam;
+    }
+
+    private void RelayoutBanner()
+    {
+        Vector2 vp = GetViewport().GetVisibleRect().Size;
+        _banner.Position = new Vector2(0, 70);
+        _banner.Size = new Vector2(vp.X, 50);
+    }
+
+    public void SetHealth(float current, float max)
+    {
+        _health.MaxValue = max;
+        _health.Value = current;
+    }
+
+    public void SetHunger(float current, float max)
+    {
+        _hunger.MaxValue = max;
+        _hunger.Value = current;
+    }
+
+    public void SetHungerVisible(bool on)
+    {
+        var p = _hunger.GetParent<Control>();
+        if (p.Visible != on) p.Visible = on;
+    }
+
+    public void SetAir(float current, float max)
+    {
+        _air.MaxValue = max;
+        _air.Value = current;
+        _air.GetParent<Control>().Visible = current < max - 0.01f;
+    }
+
+    public void ShowBanner(string text, float seconds = 3f)
+    {
+        _banner.Text = text;
+        _banner.Visible = true;
+        int token = ++_bannerToken;
+        GetTree().CreateTimer(seconds).Timeout += () => { if (token == _bannerToken) _banner.Visible = false; };
+    }
+}
